@@ -1,0 +1,143 @@
+name: Collect Upbit market data
+
+on:
+  workflow_dispatch:
+    inputs:
+      minute_days:
+        description: "Optional minute-candle history (0-3 days, hourly candles by default)"
+        required: false
+        default: "0"
+        type: choice
+        options: ["0", "1", "2", "3"]
+      recovery_slot:
+        description: "Optional current UTC slot to recover (YYYY-MM-DDTHH:00:00Z); leave blank for ordinary manual collection"
+        required: false
+        type: string
+      scheduled_source:
+        description: "Cloudflare scheduled dispatch origin (cloudflare_schedule or cloudflare_retry)"
+        required: false
+        type: string
+      manual_source:
+        description: "Optional relay origin for manual dispatch"
+        required: false
+        type: string
+      manual_request_id:
+        description: "Optional relay request ID for diagnostics"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: upbit-market-collection
+  cancel-in-progress: false
+  queue: max
+
+run-name: Coincheck collection ${{ inputs.manual_request_id || inputs.recovery_slot || github.run_id }}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Check collection slot
+        id: slot
+        run: python -m scripts.collection_slot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+          COLLECTION_RECOVERY_SLOT: ${{ inputs.recovery_slot || '' }}
+          COLLECTION_SCHEDULED_SOURCE: ${{ inputs.scheduled_source || '' }}
+          COLLECTION_MANUAL_SOURCE: ${{ inputs.manual_source || '' }}
+      - if: steps.slot.outputs.collect == 'true'
+        run: pip install -r requirements.txt
+      - name: Start collection status
+        id: start_status
+        if: steps.slot.outputs.collect == 'true'
+        env:
+          COLLECTION_MODE: ${{ steps.slot.outputs.run_mode }}
+          COLLECTION_SLOT: ${{ steps.slot.outputs.slot }}
+          REQUESTED_AT: ${{ steps.slot.outputs.requested_at }}
+          COLLECTION_TRIGGER: ${{ steps.slot.outputs.trigger }}
+        run: |
+          args=(--run-mode "$COLLECTION_MODE" --trigger "$COLLECTION_TRIGGER" --requested-at "$REQUESTED_AT")
+          if [ -n "$COLLECTION_SLOT" ]; then args+=(--slot "$COLLECTION_SLOT"); fi
+          python -m collector.system_status start "${args[@]}"
+      - name: Publish collection start
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m scripts.safe_publish status
+      - name: Collect latest snapshot
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.main
+      - name: Publish indicators stage
+        if: steps.slot.outputs.collect == 'true'
+        run: |
+          python -m collector.system_status stage --stage INDICATORS
+          python -m scripts.safe_publish status
+      - name: Collect historical candles and indicators
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.indicators_main --minute-days "${{ inputs.minute_days || '0' }}"
+      - name: Publish market summary stage
+        if: steps.slot.outputs.collect == 'true'
+        run: |
+          python -m collector.system_status stage --stage MARKET_SUMMARY
+          python -m scripts.safe_publish status
+      - name: Build compact market summary
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.market_summary_main
+      - name: Collect bounded completed hourly context
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.intraday
+        continue-on-error: true
+      - name: Publish derivatives stage
+        if: steps.slot.outputs.collect == 'true'
+        run: |
+          python -m collector.system_status stage --stage DERIVATIVES
+          python -m scripts.safe_publish status
+      - name: Probe official Gate and KuCoin APIs
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.optional_provider_probe
+      - name: Refresh cached asset identity evidence
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.asset_identity
+        continue-on-error: true
+      - name: Collect derivatives data
+        if: steps.slot.outputs.collect == 'true'
+        run: python -m collector.derivatives_main
+        env:
+          COINCHECK_PUBLISH_RUNTIME: "1"
+      - name: Finish collection status
+        if: always() && steps.slot.outputs.collect == 'true' && steps.start_status.outcome == 'success'
+        run: python -m collector.system_status finish --actions-result "${{ job.status }}"
+      - name: Safely publish collector data or failure status
+        id: publish
+        if: always() && steps.slot.outputs.collect == 'true'
+        env:
+          COLLECTION_MODE: ${{ steps.slot.outputs.run_mode }}
+          COLLECTION_SLOT: ${{ steps.slot.outputs.slot }}
+          COLLECTION_TRIGGER: ${{ steps.slot.outputs.trigger }}
+          REQUESTED_AT: ${{ steps.slot.outputs.requested_at }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            python -m scripts.safe_publish final
+          else
+            args=(--run-mode "$COLLECTION_MODE" --trigger "$COLLECTION_TRIGGER" --requested-at "$REQUESTED_AT")
+            if [ -n "$COLLECTION_SLOT" ]; then args+=(--slot "$COLLECTION_SLOT"); fi
+            python -m collector.system_status publish-failed \
+              --reason "Collection step failed before final publish" "${args[@]}"
+            python -m scripts.safe_publish status
+          fi
+      - name: Summarize collection outcome
+        if: always() && steps.slot.outputs.collect == 'true'
+        run: python -m scripts.collection_result_summary
+        env:
+          PUBLISHED_COMMIT: ${{ steps.publish.outputs.published_sha }}

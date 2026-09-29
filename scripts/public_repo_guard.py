@@ -18,7 +18,7 @@ COLLECTOR_MODULES = {
 }
 SCRIPT_MODULES = {
     "public_repo_guard", "collection_slot", "collection_health",
-    "collection_result_summary", "safe_publish",
+    "collection_result_summary", "safe_publish", "validate_public_data",
 }
 TEST_MODULES = {
     "test_public_boundaries", "test_bitget_derivatives", "test_bitget_identity",
