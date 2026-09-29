@@ -1,0 +1,29 @@
+name: Public repository boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m scripts.public_repo_guard
+      - name: Scan complete history and working tree for secrets
+        shell: bash
+        run: |
+          curl -fsSL 'https://github.com/gitleaks/gitleaks/releases/download/v8.29.1/gitleaks_8.29.1_linux_x64.tar.gz' -o /tmp/gitleaks.tar.gz
+          echo 'e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924  /tmp/gitleaks.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git --no-banner --redact --exit-code 1 .
+          /tmp/gitleaks dir --no-banner --redact --exit-code 1 .
