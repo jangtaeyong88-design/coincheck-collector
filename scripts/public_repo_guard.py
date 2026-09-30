@@ -39,7 +39,8 @@ WORKFLOWS = {"security.yml", "test.yml", "collect.yml"}
 SENSITIVE_KEYS = {
     "password", "private_key", "access_token", "refresh_token", "authorization",
     "user_id", "device_id", "analysis_text", "prompt", "recommendation",
-    "tracking", "token", "secret",
+    "tracking", "token", "secret", "project_score", "pump_setup_score",
+    "trigger_score", "proximity_score", "mfe", "mae",
 }
 SECRET_PATTERNS = (
     re.compile("gh" + r"p_[A-Za-z0-9]{20,}"),
@@ -50,8 +51,11 @@ SECRET_PATTERNS = (
 )
 STRATEGY_PATTERNS = tuple(re.compile(value, re.I) for value in (
     r"\bTOP[123]\b", r"Best\s+Watch", r"PRE_PUMP_WATCH",
-    r"IGNITION_WATCH", r"Pump\s+Setup\s+Score", r"Project\s+Score",
-    r"Trigger\s+Score", r"Proximity\s+Score", r"interest_price",
+    r"IGNITION_WATCH", r"\b(?:project|pump[_\s-]*setup|trigger|proximity)[_\s-]*score\b",
+    r"\b(?:mfe|mae)(?:_[a-z0-9]+)?\b", r"\b(?:max_favorable|max_adverse)_excursion\b",
+    r"\b(?:mfe|mae)(?:Pct|Percent|Price|At|Value)\b",
+    r"\b(?:partial|coverage|confidence)[_\s-]*score\b",
+    r"\b(?:candidate_pool|learning_loop|project_360)\b", r"interest_price",
     r"invalidation", r"coin_tracking", r"tracking_days",
     r"recommendation\s+episode", r"prepump_screening", r"app_settings",
     r"coincheck_reports",
@@ -119,7 +123,10 @@ def check_json(relative: str, content: bytes) -> None:
         raise ValueError(f"Not an allowed public JSON: {relative}")
     text = content.decode("utf-8", errors="strict")
     _scan_text(text, relative)
-    _scan_json_keys(json.loads(text), relative)
+    value = json.loads(text)
+    # Also scan decoded JSON: escaped field names must not evade the text boundary.
+    _scan_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), relative)
+    _scan_json_keys(value, relative)
 
 
 def check_tree(root: Path) -> None:

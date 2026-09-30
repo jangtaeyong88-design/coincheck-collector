@@ -39,6 +39,7 @@ run-name: Coincheck collection ${{ inputs.manual_request_id || inputs.recovery_s
 
 jobs:
   collect:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

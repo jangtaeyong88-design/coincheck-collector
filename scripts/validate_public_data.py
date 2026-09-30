@@ -53,12 +53,16 @@ def validate(root: Path) -> dict[str, dict]:
                      else documents[name].get("collected_at")) or {}
         if not isinstance(timestamp, dict) or not timestamp.get("utc"):
             raise ValueError(f"Successful run lacks {name} source time")
-    scheduled = status.get("last_scheduled_success") or {}
-    if str(scheduled.get("collection_run_id")) == str(run["id"]) and \
-            scheduled.get("data_collected_at") == observed:
-        digest = "sha256:" + hashlib.sha256((data / "latest.json").read_bytes()).hexdigest()
-        if scheduled.get("market_snapshot_id") != digest:
-            raise ValueError("Scheduled run latest snapshot digest mismatch")
+    mode = run.get("run_mode", "SCHEDULED")
+    if mode not in ("SCHEDULED", "MANUAL"):
+        raise ValueError("Successful run has invalid mode")
+    recorded = status.get(f"last_{mode.lower()}_success") or {}
+    if str(recorded.get("collection_run_id")) != str(run["id"]) or \
+            recorded.get("data_collected_at") != observed:
+        raise ValueError(f"{mode.title()} run lacks matching snapshot provenance")
+    digest = "sha256:" + hashlib.sha256((data / "latest.json").read_bytes()).hexdigest()
+    if recorded.get("market_snapshot_id") != digest:
+        raise ValueError(f"{mode.title()} run latest snapshot digest mismatch")
     return documents
 
 
