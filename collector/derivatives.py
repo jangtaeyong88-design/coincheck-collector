@@ -415,6 +415,7 @@ def _bybit_data(client: PublicClient, symbol: str, factor: int,
 def build_derivatives_snapshot(
     latest: dict[str, Any], binance: PublicClient, bybit: PublicClient,
     *, api_key: str | None = None, now: datetime | None = None,
+    legacy_providers: bool = True,
 ) -> dict[str, Any]:
     """Collect each verified contract independently; retain per-market errors."""
     records = latest.get("markets")
@@ -427,7 +428,8 @@ def build_derivatives_snapshot(
     catalogs = {}
     catalog_errors = {}
     exchange_diagnostics = {}
-    for name, client in (("binance", binance), ("bybit", bybit)):
+    clients = (("binance", binance), ("bybit", bybit)) if legacy_providers else ()
+    for name, client in clients:
         try:
             catalogs[name] = _catalog(client, name)
         except DerivativesAPIError as exc:
@@ -436,7 +438,7 @@ def build_derivatives_snapshot(
             exchange_diagnostics[name] = exc.details or {"category": "API_ERROR", "message": str(exc)[:180]}
     ticker_by_symbol: dict[str, dict[str, Any]] = {}
     ticker_at = None
-    if catalogs["bybit"] is not None:
+    if catalogs.get("bybit") is not None:
         try:
             payload = bybit.get("/v5/market/tickers", {"category": "linear"})
             ticker_at = _timestamp(payload.get("time"))
@@ -447,7 +449,7 @@ def build_derivatives_snapshot(
     markets = {}
     for code, metadata in sorted(krw.items()):
         exchange_results = {}
-        for name, client in (("binance", binance), ("bybit", bybit)):
+        for name, client in clients:
             if catalogs[name] is None:
                 exchange_results[name] = {"match": {"status": "FETCH_FAILED", "symbol": None},
                                           **_unavailable_data()}

@@ -97,7 +97,7 @@ jobs:
         run: python -m collector.market_summary_main
       - name: Collect bounded completed hourly context
         if: steps.slot.outputs.collect == 'true'
-        run: python -m collector.intraday
+        run: python -m collector.intraday --all-4h
         continue-on-error: true
       - name: Publish derivatives stage
         if: steps.slot.outputs.collect == 'true'
