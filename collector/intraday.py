@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from statistics import fmean
 
-from collector.collection_targets import rotating_markets
+from collector.collection_targets import eligible_markets, rotating_markets
 from collector.main import write_json_atomic
 from collector.upbit import RetryConfig, UpbitAPIError, UpbitClient
 
@@ -152,15 +152,80 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--latest", type=Path, default=Path("data/latest.json"))
     parser.add_argument("--output", type=Path, default=Path("data/intraday_summary.json"))
+    parser.add_argument("--all-4h", action="store_true")
     args = parser.parse_args()
     latest = json.loads(args.latest.read_text(encoding="utf-8"))
-    result = collect(latest, UpbitClient(
+    result = (collect_four_hour if args.all_4h else collect)(latest, UpbitClient(
         retry=RetryConfig(attempts=2, backoff_seconds=0.5, timeout_seconds=5)))
     write_json_atomic(result, args.output, compact=True)
-    print(f"Hourly Upbit context: {result['request_count']} requests, "
+    label = "Completed 4h Upbit context" if args.all_4h else "Hourly Upbit context"
+    print(f"{label}: {result['request_count']} requests, "
           f"{sum(row['status'] == 'AVAILABLE' for row in result['markets'].values())} complete, "
-          f"{result['omitted_market_count']} outside bounded scope")
+          f"{result['omitted_market_count']} omitted")
     return 0
+
+
+def calculate_four_hour(candles: list[dict], now: datetime, market: str) -> dict:
+    """A completed 4h candle versus 20 preceding non-overlapping candles."""
+    complete = {}
+    for row in candles:
+        if row.get("market") != market:
+            raise ValueError("Candle market mismatch")
+        start = _utc(row["candle_date_time_utc"])
+        if start.minute or start.second or start.hour % 4:
+            raise ValueError("Invalid four-hour boundary")
+        if start + timedelta(hours=4) <= now:
+            if start in complete and complete[start] != row:
+                raise ValueError("Conflicting candle observation")
+            complete[start] = row
+    ordered = sorted(complete.items())
+    result = {"source": "UPBIT_COMPLETED_4H_CANDLES", "status": "INSUFFICIENT_HISTORY",
+              "observed_at": _iso(ordered[-1][0] + timedelta(hours=4)) if ordered else None,
+              "completed_candle_count": len(ordered), "price_change_pct_4h": None,
+              "rvol_4h": None, "relative_traded_value_4h": None,
+              "traded_value_4h_krw": None, "missing_reason": None}
+    if len(ordered) < 21 or any(ordered[i][0] - ordered[i-1][0] != timedelta(hours=4)
+            for i in range(len(ordered)-20, len(ordered))):
+        result["missing_reason"] = "NONCONTIGUOUS_OR_INSUFFICIENT_COMPLETED_CANDLES"
+        return result
+    if now - (ordered[-1][0] + timedelta(hours=4)) >= timedelta(hours=4):
+        result.update(status="STALE", missing_reason="LAST_COMPLETED_CANDLE_IS_STALE")
+        return result
+    current = ordered[-1][1]
+    baseline = [row for _, row in ordered[-21:-1]]
+    volume_base = fmean(_number(row["candle_acc_trade_volume"]) for row in baseline)
+    turnover_base = fmean(_number(row["candle_acc_trade_price"]) for row in baseline)
+    close = _number(current["trade_price"], positive=True)
+    previous = _number(ordered[-2][1]["trade_price"], positive=True)
+    result.update(price_change_pct_4h=round((close / previous - 1)*100, 6),
+                  rvol_4h=round(_number(current["candle_acc_trade_volume"])/volume_base, 6) if volume_base else None,
+                  relative_traded_value_4h=round(_number(current["candle_acc_trade_price"])/turnover_base, 6) if turnover_base else None,
+                  traded_value_4h_krw=_number(current["candle_acc_trade_price"]))
+    result.update(status="AVAILABLE" if volume_base and turnover_base else "PARTIAL",
+                  missing_reason=None if volume_base and turnover_base else "ZERO_BASELINE")
+    return result
+
+
+def collect_four_hour(latest: dict, client: UpbitClient, *, now=None, clock=None) -> dict:
+    clock = clock or (lambda: now or datetime.now(UTC))
+    markets = sorted(eligible_markets(latest))
+    results = {}
+    started = clock()
+    for code in markets:
+        try:
+            candles = client.get_minute_candles(code, 240, 24)
+            results[code] = calculate_four_hour(candles, clock(), code)
+        except (UpbitAPIError, KeyError, TypeError, ValueError):
+            results[code] = {"status": "FETCH_FAILED", "observed_at": None,
+                             "missing_reason": "INVALID_OR_UNAVAILABLE_CANDLES"}
+    return {"schema_version": "1.0", "collected_at": _iso(clock()),
+            "started_at": _iso(started),
+            "source_latest_collected_at": (latest.get("collected_at") or {}).get("utc"),
+            "source": "Upbit public 240-minute candle API", "request_count": len(markets),
+            "market_limit": len(markets), "eligible_market_count": len(markets),
+            "omitted_market_count": 0, "markets": results,
+            "metric_definition": {"4h": "last completed candle versus preceding 20 completed 4h candles",
+                                  "missing_candle": "unknown; never filled with zero"}}
 
 
 if __name__ == "__main__":

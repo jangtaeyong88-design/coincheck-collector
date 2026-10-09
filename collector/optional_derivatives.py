@@ -141,7 +141,7 @@ def _hourly_changes(rows: list[dict], value_key: str, time_key: str,
     if require_fresh and newest and not (-300_000 <= int(time.time() * 1000) - newest[0] <= 2 * HOUR_MS):
         newest = None
     changes = {}
-    for hours in (1, 4, 24):
+    for hours in (4, 24):
         result = {"pct": None, "reference_at_ms": None, "elapsed_ms": None,
                   "status": "INSUFFICIENT_HISTORY"}
         if newest and newest[1] is not None:
@@ -526,9 +526,9 @@ def add_optional_providers(snapshot: dict, latest: dict, market_summary: dict | 
         gate_oi = gate_record.get("oi") or {}
         if (bitget.get("match") or {}).get("status") == "VERIFIED" and \
                 any((bitget_oi.get("changes") or {}).get(f"{hours}h", {}).get("status") != "AVAILABLE"
-                    for hours in (1, 4, 24)) and \
+                    for hours in (4, 24)) and \
                 any((gate_oi.get("changes") or {}).get(f"{hours}h", {}).get("status") != "AVAILABLE"
-                    for hours in (1, 4, 24)):
+                    for hours in (4, 24)):
             reasons.append("OI_HISTORY_GAP")
         if enable_kucoin and reasons and kucoin_catalog is not None:
             asset = code.removeprefix("KRW-")

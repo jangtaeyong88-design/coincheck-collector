@@ -7,14 +7,14 @@ import re
 from pathlib import Path
 
 
-ROOT_FILES = {"README.md", ".gitignore", "requirements.txt", "data/.gitkeep"}
+ROOT_FILES = {"README.md", ".gitignore", ".gitleaks.toml", "requirements.txt", "data/.gitkeep"}
 COLLECTOR_MODULES = {
     "__init__", "main", "upbit", "indicators", "indicators_main",
     "market_summary", "market_summary_main", "intraday", "collection_targets",
     "collection_quality", "system_status", "derivatives", "derivatives_main",
     "derivatives_diagnostic", "derivatives_history", "bitget_derivatives",
     "bitget_identity", "optional_derivatives", "optional_provider_probe",
-    "provider_probe", "asset_identity", "identity_audit", "time_utils",
+    "provider_probe", "asset_identity", "identity_audit", "time_utils", "market_turnover",
 }
 SCRIPT_MODULES = {
     "public_repo_guard", "collection_slot", "collection_health",
@@ -26,7 +26,7 @@ TEST_MODULES = {
     "test_derivatives_history", "test_derivatives_integration", "test_indicators",
     "test_intraday", "test_market_summary", "test_optional_derivatives",
     "test_provider_probe", "test_runtime_status", "test_upbit_integration",
-    "test_collection_health", "test_safe_publish", "test_asset_identity",
+    "test_collection_health", "test_safe_publish", "test_asset_identity", "test_market_turnover",
 }
 RUNTIME_NAMES = {
     "latest", "indicators", "market_summary", "intraday_summary",
