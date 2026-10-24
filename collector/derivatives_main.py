@@ -47,7 +47,7 @@ def main() -> int:
     with args.latest.open(encoding="utf-8") as handle:
         latest = json.load(handle)
     binance, bybit = default_clients()
-    result = build_derivatives_snapshot(latest, binance, bybit)
+    result = build_derivatives_snapshot(latest, binance, bybit, legacy_providers=False)
     cache = load_cache(args.identity_cache)
     transition("bitget", "start")
     if cache:
@@ -82,6 +82,13 @@ def main() -> int:
     history = update_history(load_history(args.history), result)
     history = update_optional_history(history, result)
     add_observation_coverage(result)
+    from collector.market_turnover import add_turnover
+    add_turnover(result)
+    for pair in result["markets"].values():
+        for row in pair.values():
+            ((row.get("oi") or {}).get("changes") or {}).pop("1h", None)
+    for counts in result["summary"].get("provider_counts", {}).values():
+        counts.get("oi_change_available", {}).pop("1h", None)
     write_json_atomic(history, args.history, compact=True)
     write_json_atomic(result, args.output, compact=True)
     identity_audit = write_audit(result, latest, cache, args.identity_baseline,

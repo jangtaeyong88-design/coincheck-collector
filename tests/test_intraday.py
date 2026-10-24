@@ -3,7 +3,7 @@
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from collector.intraday import calculate_hourly, collect, select_targets
+from collector.intraday import calculate_hourly, collect, select_targets, calculate_four_hour, collect_four_hour
 from collector.upbit import UpbitAPIError
 
 
@@ -79,6 +79,44 @@ class IntradayTests(unittest.TestCase):
         self.assertEqual("AVAILABLE", result["markets"]["KRW-BTC"]["status"])
         self.assertEqual("FETCH_FAILED", result["markets"]["KRW-ETH"]["status"])
         self.assertEqual("2026-09-27T12:00:00Z", result["source_latest_collected_at"])
+
+
+class FourHourTests(unittest.TestCase):
+    def candles(self):
+        first = NOW.replace(minute=0) - timedelta(hours=84)
+        return [{"market": "KRW-BTC", "candle_date_time_utc": (first + timedelta(hours=4*i)).isoformat(),
+                 "trade_price": 100+i, "candle_acc_trade_volume": 10,
+                 "candle_acc_trade_price": 1000} for i in range(21)]
+
+    def test_complete_direct_four_hour_window_excludes_open_candle(self):
+        rows = self.candles()
+        rows[-1]["candle_acc_trade_volume"] = 30
+        rows.append({**rows[-1], "candle_date_time_utc": "2026-09-27T12:00:00Z", "trade_price": 99999})
+        result = calculate_four_hour(rows, NOW, "KRW-BTC")
+        self.assertEqual("AVAILABLE", result["status"])
+        self.assertEqual(3, result["rvol_4h"])
+        self.assertAlmostEqual((120/119-1)*100, result["price_change_pct_4h"], places=5)
+        self.assertNotIn("rvol_1h", result)
+
+    def test_missing_or_stale_candles_never_become_zero_filled(self):
+        rows = self.candles()
+        self.assertEqual("INSUFFICIENT_HISTORY", calculate_four_hour(rows[:-1], NOW, "KRW-BTC")["status"])
+        self.assertEqual("STALE", calculate_four_hour(rows, NOW+timedelta(hours=4), "KRW-BTC")["status"])
+
+    def test_every_valid_market_is_queried_not_twenty_market_rotation(self):
+        class API:
+            def __init__(api): api.calls=[]
+            def get_minute_candles(api, code, unit, count):
+                api.calls.append((code,unit,count))
+                return [{**row, "market": code} for row in self.candles()]
+        api=API()
+        latest={"collected_at":{"utc":"2026-09-27T12:00:00Z"}, "markets":[
+            {"market":f"KRW-C{i}","ticker":{"trade_price":100}} for i in range(31)]}
+        result=collect_four_hour(latest,api,now=NOW)
+        self.assertEqual(31,len(api.calls))
+        self.assertTrue(all(unit==240 for _,unit,_ in api.calls))
+        self.assertEqual(0,result["omitted_market_count"])
+        self.assertTrue(all(row["status"]=="AVAILABLE" for row in result["markets"].values()))
 
 
 if __name__ == "__main__":
